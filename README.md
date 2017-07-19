@@ -50,6 +50,10 @@ Usage
 INSTALLATION
 ============
 
+    cpanm git://github.com/larion/cryptolio
+
+    Or clone the repository and do:
+
     perl Makefile.PL
     make
     sudo make install
