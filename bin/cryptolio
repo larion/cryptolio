@@ -1,0 +1,157 @@
+#! /usr/bin/perl
+
+use strict;
+use warnings;
+
+our $VERSION = "0.01";
+
+use LWP::UserAgent;
+use JSON;
+use List::Util qw(sum uniq);
+use Text::Table;
+use File::Slurp;
+use File::Basename;
+
+my $url_ticker     = "https://api.coinmarketcap.com/v1/ticker/?convert=EUR";
+my $url_global     = "https://api.coinmarketcap.com/v1/global/?convert=EUR";
+my $portfolio_path = glob('~/.cryptolio.json');
+
+my %portfolio;
+eval {
+    %portfolio = %{ from_json(read_file($portfolio_path)) };
+};
+if ($@) {
+    my $error = $@;
+    if (-e $portfolio_path) {
+        print "Couldn't process portfolio file. Error: $error";
+        exit;
+    }
+    write_file($portfolio_path, '{}');
+}
+
+my $ua = LWP::UserAgent->new;
+my $ticker_data = from_json($ua->get($url_ticker)->decoded_content);
+my $global_data = from_json($ua->get($url_global)->decoded_content);
+$ticker_data = { map { $_->{symbol} => $_ } @$ticker_data };
+
+if (@ARGV > 1) {
+    my $currency = uc shift;
+    my $new_position = shift;
+    my $exchange = shift || "wallet";
+
+    if (! exists $ticker_data->{$currency} ) {
+        print "Your ticker symbol is not available on coinmarketcap. Available symbols are: " . join(', ', sort {$a cmp $b} keys(%$ticker_data)) . "\n";
+        exit;
+    }
+
+    if ($new_position != 0) {
+        $portfolio{$currency} = {
+            q => $new_position,
+            exchange => $exchange,
+        };
+    }
+    else {
+        delete $portfolio{$currency};
+    }
+    write_file($portfolio_path, to_json(\%portfolio));
+    exit;
+}
+
+my $currency = shift || 'usd';
+my $order = shift || 'value';
+
+my $total_market_cap = $global_data->{"total_market_cap_$currency"};
+
+my @portfolio_full = map {
+    currency     => $_,
+    qty          => $portfolio{$_}->{q},
+    exchange     => $portfolio{$_}->{exchange},
+	price        => $ticker_data->{$_}{"price_$currency"},
+	value        => $ticker_data->{$_}{"price_$currency"} * $portfolio{$_}->{q},
+	market_share => $ticker_data->{$_}{"market_cap_$currency"}/$total_market_cap*100,
+	market_cap   => $ticker_data->{$_}{"market_cap_$currency"}/1000_000,
+    change_1h    => $ticker_data->{$_}{percent_change_1h},
+    change_24h   => $ticker_data->{$_}{percent_change_24h},
+    change_7d    => $ticker_data->{$_}{percent_change_7d},
+}, keys %portfolio;
+
+my $portfolio_value = sum map $_->{value}, @portfolio_full;
+my $portfolio_value_1h  = sum map $_->{value}/(1+$_->{change_1h}/100), @portfolio_full;
+my $portfolio_value_24h = sum map $_->{value}/(1+$_->{change_24h}/100), @portfolio_full;
+my $portfolio_value_7d  = sum map $_->{value}/(1+$_->{change_7d}/100), @portfolio_full;
+my $market_share_represented_in_portfolio = sum map $_->{market_share}, @portfolio_full;
+my $market_cap_represented_in_portfolio = sum map $_->{market_cap}, @portfolio_full;
+my @exchanges = uniq grep $_ ne 'wallet', map $_->{exchange}, @portfolio_full;
+my %counterparty_risks = map {
+    my $e = $_;
+    my $total_value_on_exchange = sum map $_->{value}, grep {$_->{exchange} eq $e} @portfolio_full;
+    ($e => $total_value_on_exchange);
+} @exchanges;
+
+if(!$portfolio_value) {
+    my $program_name = basename $0;
+    print "Portfolio is empty. Add some cryptocurrencies first. Example:\n\n"
+    ."$program_name BTC 1 bitfinex # this would add 1 btc to the portfolio on the "
+    ."bitfinex exchange (the third parameter [exchange] is optional)\n\n";
+    exit;
+}
+
+@portfolio_full = map { {%$_, share => $_->{value}/$portfolio_value} } @portfolio_full;
+@portfolio_full = sort {$b->{$order} <=> $a->{$order} || $b->{market_cap} <=> $a->{market_cap}} @portfolio_full;
+
+my $table = Text::Table->new(
+    "currency",
+    {title => "position", align => "left"},
+    {title => "price", align => "left"},
+    {title => "value",align => "left"},
+    {title => "share", align => "left"},
+    "market share",
+    {title => "market cap", align => "left"},
+    "change 1h",
+    "change 24h",
+    "change 7d",
+    "exchange",
+);
+
+my @table_contents = map [
+    $_->{currency},
+    $_->{qty},
+    sprintf("%.2f",  $_->{price}),
+    sprintf("%.2f",  $_->{value}),
+    sprintf("%.2f%%", $_->{share}*100),
+    sprintf("%.2f%%", $_->{market_share}),
+    sprintf("%.0fM", $_->{market_cap}),
+    sprintf("%.2f%%", $_->{change_1h}),
+    sprintf("%.2f%%", $_->{change_24h}),
+    sprintf("%.2f%%", $_->{change_7d}),
+    $_->{exchange},
+], @portfolio_full;
+push @table_contents, [
+    "TOTAL",
+    "---",
+    "---",
+    sprintf("%.2f", $portfolio_value),
+    "100%",
+    sprintf("%.1f%%", $market_share_represented_in_portfolio),
+    sprintf("%.0fM", $market_cap_represented_in_portfolio),
+    sprintf("%.2f%%", 100*($portfolio_value/$portfolio_value_1h-1)),
+    sprintf("%.2f%%", 100*($portfolio_value/$portfolio_value_24h-1)),
+    sprintf("%.2f%%", 100*($portfolio_value/$portfolio_value_7d-1)),
+];
+$table->load(@table_contents);
+
+print $table;
+
+print "\nTotal cryptocurrency market cap: " . sprintf("%.2fB", $total_market_cap/1000_000_000) . "\n";
+print "\nCounterparty risks:\n\n";
+
+my $counterparty_risk_table = Text::Table->new(
+    "exchange   ",
+    {title => "risk", align => "left"},
+);
+@table_contents = map [$_ => sprintf("%.2f", $counterparty_risks{$_})],
+                  sort {$counterparty_risks{$b} <=> $counterparty_risks{$a}}
+                  keys %counterparty_risks;
+$counterparty_risk_table->load(@table_contents);
+
+print $counterparty_risk_table;
