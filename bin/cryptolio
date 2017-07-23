@@ -113,6 +113,10 @@ my $table = Text::Table->new(
     "exchange",
 );
 
+my $portfolio_change_1h  = 100*($portfolio_value/$portfolio_value_1h-1);
+my $portfolio_change_24h = 100*($portfolio_value/$portfolio_value_24h-1);
+my $portfolio_change_7d  = 100*($portfolio_value/$portfolio_value_7d-1);
+
 my @table_contents = map [
     $_->{currency},
     $_->{qty},
@@ -121,9 +125,9 @@ my @table_contents = map [
     sprintf("%.2f%%", $_->{share}*100),
     sprintf("%.2f%%", $_->{market_share}),
     sprintf("%.0fM", $_->{market_cap}),
-    sprintf("%.2f%%", $_->{change_1h}),
-    sprintf("%.2f%%", $_->{change_24h}),
-    sprintf("%.2f%%", $_->{change_7d}),
+    ($_->{change_1h} > 0 ? "\e[32m" : "\e[31m") . sprintf("%.2f%%", $_->{change_1h}),
+    ($_->{change_24h} > 0 ? "\e[32m" : "\e[31m") . sprintf("%.2f%%", $_->{change_24h}),
+    ($_->{change_7d} > 0 ? "\e[32m" : "\e[31m") . sprintf("%.2f%%\e[0m", $_->{change_7d}),
     $_->{exchange},
 ], @portfolio_full;
 push @table_contents, [
@@ -134,9 +138,10 @@ push @table_contents, [
     "100%",
     sprintf("%.1f%%", $market_share_represented_in_portfolio),
     sprintf("%.0fM", $market_cap_represented_in_portfolio),
-    sprintf("%.2f%%", 100*($portfolio_value/$portfolio_value_1h-1)),
-    sprintf("%.2f%%", 100*($portfolio_value/$portfolio_value_24h-1)),
-    sprintf("%.2f%%", 100*($portfolio_value/$portfolio_value_7d-1)),
+    ($portfolio_change_1h > 0 ? "\e[32m" : "\e[31m") . sprintf("%.2f%%", $portfolio_change_1h),
+    ($portfolio_change_24h > 0 ? "\e[32m" : "\e[31m") .sprintf("%.2f%%", $portfolio_change_24h),
+    ($portfolio_change_7d > 0 ? "\e[32m" : "\e[31m") . sprintf("%.2f%%\e[0m", $portfolio_change_7d),
+    "---",
 ];
 $table->load(@table_contents);
 
