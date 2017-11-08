@@ -12,7 +12,7 @@ use Text::Table;
 use File::Slurp;
 use File::Basename;
 
-my $url_ticker     = "https://api.coinmarketcap.com/v1/ticker/?convert=EUR";
+my $url_ticker     = "https://api.coinmarketcap.com/v1/ticker/?convert=EUR&limit=0";
 my $url_global     = "https://api.coinmarketcap.com/v1/global/?convert=EUR";
 my $portfolio_path = glob('~/.cryptolio.json');
 
