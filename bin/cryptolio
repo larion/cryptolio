@@ -32,16 +32,26 @@ if ($@) {
 my $ua = LWP::UserAgent->new;
 my $ticker_data = from_json($ua->get($url_ticker)->decoded_content);
 my $global_data = from_json($ua->get($url_global)->decoded_content);
-$ticker_data = { map { $_->{symbol} => $_ } @$ticker_data };
+$ticker_data = { map { $_->{id} => $_ } @$ticker_data };
 
 if (@ARGV > 1) {
-    my $currency = uc shift;
+    my $currency = lc shift;
     my $new_position = shift;
     my $exchange = shift || "wallet";
 
     if (! exists $ticker_data->{$currency} ) {
-        print "Your ticker symbol is not available on coinmarketcap. Available symbols are: " . join(', ', sort {$a cmp $b} keys(%$ticker_data)) . "\n";
-        exit;
+        $currency = uc $currency;
+        my @ticker_matches = grep { $ticker_data->{$_}->{symbol} eq $currency } keys %$ticker_data;
+        if (@ticker_matches > 1) {
+            print "No unique cryptocurrency found with this ticker symbol. Please specify id (example: cryptolio $ticker_matches[0] $new_position). Matches: @ticker_matches.\n";
+            exit;
+        }
+        elsif (@ticker_matches == 0) {
+            print "Your id is not available on coinmarketcap. Available ids are: " . join(', ', sort {$a cmp $b} keys(%$ticker_data)) . "\n";
+            exit;
+        }
+
+        $currency = $ticker_matches[0];
     }
 
     if ($new_position != 0) {
@@ -64,6 +74,7 @@ my $total_market_cap = $global_data->{"total_market_cap_$currency"};
 
 my @portfolio_full = map {
     currency     => $_,
+    ticker       => $ticker_data->{$_}->{symbol},
     qty          => $portfolio{$_}->{q},
     exchange     => $portfolio{$_}->{exchange},
 	price        => $ticker_data->{$_}{"price_$currency"},
@@ -118,7 +129,7 @@ my $portfolio_change_24h = 100*($portfolio_value/$portfolio_value_24h-1);
 my $portfolio_change_7d  = 100*($portfolio_value/$portfolio_value_7d-1);
 
 my @table_contents = map [
-    $_->{currency},
+    $_->{ticker},
     $_->{qty},
     sprintf("%.2f",  $_->{price}),
     sprintf("%.2f",  $_->{value}),
