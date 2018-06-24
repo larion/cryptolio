@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 
-our $VERSION = "0.02";
+our $VERSION = "0.03";
 
 use LWP::UserAgent;
 use JSON;
@@ -12,9 +12,21 @@ use Text::Table;
 use File::Slurp;
 use File::Basename;
 
-my $url_ticker     = "https://api.coinmarketcap.com/v1/ticker/?convert=EUR&limit=0";
-my $url_global     = "https://api.coinmarketcap.com/v1/global/?convert=EUR";
+my $url_listings   = "https://api.coinmarketcap.com/v2/listings";
+my $url_ticker     = "https://api.coinmarketcap.com/v2/ticker/%s/?convert=EUR";
+my $url_global     = "https://api.coinmarketcap.com/v2/global/?convert=EUR";
 my $portfolio_path = glob('~/.cryptolio.json');
+
+sub search_listings_by_field {
+    my ($listings, $field, $query) = @_;
+    return grep { lc $listings->{$_}->{$field} eq lc $query } keys %$listings;
+}
+
+sub stringify_list_of_cmc_ids {
+    my ($listings, @ids) = @_;
+    my @website_slugs = map $listings->{$_}{website_slug}, @ids;
+    return join(', ', sort {$a cmp $b} @website_slugs);
+}
 
 my %portfolio;
 eval {
@@ -29,62 +41,81 @@ if ($@) {
     write_file($portfolio_path, '{}');
 }
 
-my $ua = LWP::UserAgent->new;
-my $ticker_data = from_json($ua->get($url_ticker)->decoded_content);
+my $ua = LWP::UserAgent->new(
+    agent => "Cryptolio v$VERSION",
+);
+
 my $global_data = from_json($ua->get($url_global)->decoded_content);
-$ticker_data = { map { $_->{id} => $_ } @$ticker_data };
 
 if (@ARGV > 1) {
-    my $currency = lc shift;
+    my $currency = shift;
     my $new_position = shift;
     my $exchange = shift || "wallet";
+    my $listings = from_json($ua->get($url_listings)->decoded_content);
+    $listings = { map { $_->{id} => $_ } @{$listings->{data}} };
 
-    if (! exists $ticker_data->{$currency} ) {
-        $currency = uc $currency;
-        my @ticker_matches = grep { $ticker_data->{$_}->{symbol} eq $currency } keys %$ticker_data;
-        if (@ticker_matches > 1) {
-            print "No unique cryptocurrency found with this ticker symbol. Please specify id (example: cryptolio $ticker_matches[0] $new_position). Matches: @ticker_matches.\n";
-            exit;
-        }
-        elsif (@ticker_matches == 0) {
-            print "Your id is not available on coinmarketcap. Available ids are: " . join(', ', sort {$a cmp $b} keys(%$ticker_data)) . "\n";
-            exit;
-        }
+    my @search_order = ("name", "website_slug", "symbol", "id");
 
-        $currency = $ticker_matches[0];
+    my @coin_id;
+    my @non_unique_matches;
+    while (@coin_id != 1 and @search_order) {
+        my $search_field = shift @search_order;
+        @coin_id = search_listings_by_field($listings, $search_field, $currency);
+        @non_unique_matches = @coin_id if (@coin_id > 1);
+    }
+    if (@coin_id != 1) {
+        if (@non_unique_matches) {
+            my $example_name = stringify_list_of_cmc_ids($listings, $non_unique_matches[0]);
+            print "There is no such unique currency. Please specify name (example: cryptolio $example_name $new_position). Matches: "
+                  . stringify_list_of_cmc_ids($listings, @non_unique_matches) . "\n";
+        } else {
+            print "Your currency is not available on coinmarketcap. Available currencies are: "
+                  . stringify_list_of_cmc_ids($listings, keys %$listings) . "\n";
+        }
+        exit;
     }
 
-    if ($new_position != 0) {
-        $portfolio{$currency} = {
+    if ($new_position == 0) {
+        delete $portfolio{$coin_id[0]};
+    }
+    else {
+        $portfolio{$coin_id[0]} = {
             q => $new_position,
             exchange => $exchange,
         };
-    }
-    else {
-        delete $portfolio{$currency};
     }
     write_file($portfolio_path, to_json(\%portfolio));
     exit;
 }
 
-my $currency = shift || 'usd';
+my $currency = uc( shift || 'USD' );
 my $order = shift || 'value';
 
-my $total_market_cap = $global_data->{"total_market_cap_$currency"};
+my $total_market_cap = $global_data->{data}{quotes}{$currency}{"total_market_cap"};
+%portfolio = map {
+    $_ => {
+        %{$portfolio{$_}},
+        market_data => from_json($ua->get(sprintf($url_ticker, $_))->decoded_content)->{"data"},
+    }
+} keys %portfolio;
 
 my @portfolio_full = map {
-    currency     => $_,
-    ticker       => $ticker_data->{$_}->{symbol},
-    qty          => $portfolio{$_}->{q},
-    exchange     => $portfolio{$_}->{exchange},
-	price        => $ticker_data->{$_}{"price_$currency"},
-	value        => $ticker_data->{$_}{"price_$currency"} * $portfolio{$_}->{q},
-	market_share => $ticker_data->{$_}{"market_cap_$currency"}/$total_market_cap*100,
-	market_cap   => $ticker_data->{$_}{"market_cap_$currency"}/1000_000,
-    change_1h    => $ticker_data->{$_}{percent_change_1h},
-    change_24h   => $ticker_data->{$_}{percent_change_24h},
-    change_7d    => $ticker_data->{$_}{percent_change_7d},
-}, keys %portfolio;
+    my $portfolio_data = $portfolio{$_};
+    my $market_data = $portfolio_data->{market_data};
+    {
+        currency     => $_,
+        ticker       => $market_data->{symbol},
+        qty          => $portfolio_data->{q},
+        exchange     => $portfolio_data->{exchange},
+        price        => $market_data->{quotes}{$currency}{price},
+        value        => $market_data->{quotes}{$currency}{price} * $portfolio_data->{q},
+        market_share => $market_data->{quotes}{$currency}{market_cap}/$total_market_cap*100,
+        market_cap   => $market_data->{quotes}{$currency}{market_cap}/1000_000,
+        change_1h    => $market_data->{quotes}{$currency}{percent_change_1h},
+        change_24h   => $market_data->{quotes}{$currency}{percent_change_24h},
+        change_7d    => $market_data->{quotes}{$currency}{percent_change_7d},
+    };
+} keys %portfolio;
 
 my $portfolio_value = sum map $_->{value}, @portfolio_full;
 my $portfolio_value_1h  = sum map $_->{value}/(1+$_->{change_1h}/100), @portfolio_full;
