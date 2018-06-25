@@ -92,6 +92,8 @@ my $currency = uc( shift || 'USD' );
 my $order = shift || 'value';
 
 my $total_market_cap = $global_data->{data}{quotes}{$currency}{"total_market_cap"};
+my $total_volume_24h     = $global_data->{data}{quotes}{$currency}{"total_volume_24h"};
+
 %portfolio = map {
     $_ => {
         %{$portfolio{$_}},
@@ -190,6 +192,7 @@ $table->load(@table_contents);
 print $table;
 
 print "\nTotal cryptocurrency market cap: " . sprintf("%.2fB", $total_market_cap/1000_000_000) . "\n";
+print "Total volume (last 24 hours): " . sprintf("%.2fB", $total_volume_24h/1000_000_000) . "\n";
 print "\nCounterparty risks:\n\n";
 
 my $counterparty_risk_table = Text::Table->new(
