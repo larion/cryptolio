@@ -11,6 +11,7 @@ use List::Util qw(sum uniq);
 use Text::Table;
 use File::Slurp;
 use File::Basename;
+use Scalar::Util qw(looks_like_number);
 
 my $url_listings   = "https://api.coinmarketcap.com/v2/listings";
 my $url_ticker     = "https://api.coinmarketcap.com/v2/ticker/%s/?convert=%s";
@@ -48,6 +49,7 @@ my $ua = LWP::UserAgent->new(
 if (@ARGV > 1) {
     my $coin = shift;
     my $new_position = shift;
+    die "To add coins: cryptolio [coin to add] [amount]. Example: cryptolio btc 0.5\n" unless looks_like_number($new_position);
     my $exchange = shift || "wallet";
 
     my $listings = from_json($ua->get($url_listings)->decoded_content);
