@@ -13,8 +13,8 @@ use File::Slurp;
 use File::Basename;
 
 my $url_listings   = "https://api.coinmarketcap.com/v2/listings";
-my $url_ticker     = "https://api.coinmarketcap.com/v2/ticker/%s/?convert=EUR";
-my $url_global     = "https://api.coinmarketcap.com/v2/global/?convert=EUR";
+my $url_ticker     = "https://api.coinmarketcap.com/v2/ticker/%s/?convert=%s";
+my $url_global     = "https://api.coinmarketcap.com/v2/global/?convert=%s";
 my $portfolio_path = glob('~/.cryptolio.json');
 
 sub search_listings_by_field {
@@ -45,12 +45,11 @@ my $ua = LWP::UserAgent->new(
     agent => "Cryptolio v$VERSION",
 );
 
-my $global_data = from_json($ua->get($url_global)->decoded_content);
-
 if (@ARGV > 1) {
-    my $currency = shift;
+    my $coin = shift;
     my $new_position = shift;
     my $exchange = shift || "wallet";
+
     my $listings = from_json($ua->get($url_listings)->decoded_content);
     $listings = { map { $_->{id} => $_ } @{$listings->{data}} };
 
@@ -58,9 +57,10 @@ if (@ARGV > 1) {
 
     my @coin_id;
     my @non_unique_matches;
+
     while (@coin_id != 1 and @search_order) {
         my $search_field = shift @search_order;
-        @coin_id = search_listings_by_field($listings, $search_field, $currency);
+        @coin_id = search_listings_by_field($listings, $search_field, $coin);
         @non_unique_matches = @coin_id if (@coin_id > 1);
     }
     if (@coin_id != 1) {
@@ -91,13 +91,15 @@ if (@ARGV > 1) {
 my $currency = uc( shift || 'USD' );
 my $order = shift || 'value';
 
+my $global_data = from_json($ua->get(sprintf($url_global, $currency))->decoded_content);
+
 my $total_market_cap = $global_data->{data}{quotes}{$currency}{"total_market_cap"};
 my $total_volume_24h     = $global_data->{data}{quotes}{$currency}{"total_volume_24h"};
 
 %portfolio = map {
     $_ => {
         %{$portfolio{$_}},
-        market_data => from_json($ua->get(sprintf($url_ticker, $_))->decoded_content)->{"data"},
+        market_data => from_json($ua->get(sprintf($url_ticker, $_, $currency))->decoded_content)->{"data"},
     }
 } keys %portfolio;
 
