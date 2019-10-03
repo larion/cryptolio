@@ -11,12 +11,18 @@ use List::Util qw(sum uniq);
 use Text::Table;
 use File::Slurp;
 use File::Basename;
+use File::Path qw(make_path);
+use File::Spec;
 use Scalar::Util qw(looks_like_number);
 
-my $url_listings   = "https://api.coinmarketcap.com/v2/listings";
-my $url_ticker     = "https://api.coinmarketcap.com/v2/ticker/%s/?convert=%s";
-my $url_global     = "https://api.coinmarketcap.com/v2/global/?convert=%s";
-my $portfolio_path = glob('~/.cryptolio.json');
+my $url_listings   = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/map";
+my $url_ticker     = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?id=%s&convert=%s";
+my $url_global     = "https://pro-api.coinmarketcap.com/v1/global-metrics/quotes/latest?convert=%s";
+
+my $config_dir = glob('~/.config/cryptolio');
+my $portfolio_fname = File::Spec->catfile($config_dir, 'portfolio.json');
+my $config_fname = File::Spec->catfile($config_dir, 'config.json');
+make_path($config_dir);
 
 sub search_listings_by_field {
     my ($listings, $field, $query) = @_;
@@ -25,25 +31,52 @@ sub search_listings_by_field {
 
 sub stringify_list_of_cmc_ids {
     my ($listings, @ids) = @_;
-    my @website_slugs = map $listings->{$_}{website_slug}, @ids;
+    my @website_slugs = map $listings->{$_}{slug}, @ids;
     return join(', ', sort {$a cmp $b} @website_slugs);
+}
+
+my $api_key;
+eval {
+    my %conf = %{ from_json(read_file($config_fname)) };
+    $api_key   = $conf{api_key};
+};
+if ($@) {
+    my $error = $@;
+    if (-e $config_fname) {
+        print "Couldn't process config file. Error: $error";
+        exit;
+    }
+
+    # First execution, setup
+    print("Please provide API key (you can get one at https://pro.coinmarketcap.com/signup): ");
+    chomp($api_key = <STDIN>);
+
+    write_file($config_fname, to_json({api_key=> $api_key}));
 }
 
 my %portfolio;
 eval {
-    %portfolio = %{ from_json(read_file($portfolio_path)) };
+    %portfolio = %{ from_json(read_file($portfolio_fname)) };
 };
 if ($@) {
     my $error = $@;
-    if (-e $portfolio_path) {
+    if (-e $portfolio_fname) {
         print "Couldn't process portfolio file. Error: $error";
         exit;
     }
-    write_file($portfolio_path, '{}');
+
+    # Initialize portfolio file if it doesn't exist
+    %portfolio = ();
+    write_file($portfolio_fname, to_json({}));
 }
 
 my $ua = LWP::UserAgent->new(
     agent => "Cryptolio v$VERSION",
+);
+
+$ua->default_header(
+    ':X-CMC_PRO_API_KEY' => $api_key,
+    'Accept' =>  'application/json'
 );
 
 if (@ARGV > 1) {
@@ -55,7 +88,7 @@ if (@ARGV > 1) {
     my $listings = from_json($ua->get($url_listings)->decoded_content);
     $listings = { map { $_->{id} => $_ } @{$listings->{data}} };
 
-    my @search_order = ("name", "website_slug", "symbol", "id");
+    my @search_order = ("name", "slug", "symbol", "id");
 
     my @coin_id;
     my @non_unique_matches;
@@ -86,7 +119,7 @@ if (@ARGV > 1) {
             exchange => $exchange,
         };
     }
-    write_file($portfolio_path, to_json(\%portfolio));
+    write_file($portfolio_fname, to_json(\%portfolio));
     exit;
 }
 
@@ -95,13 +128,15 @@ my $order = shift || 'value';
 
 my $global_data = from_json($ua->get(sprintf($url_global, $currency))->decoded_content);
 
-my $total_market_cap = $global_data->{data}{quotes}{$currency}{"total_market_cap"};
-my $total_volume_24h     = $global_data->{data}{quotes}{$currency}{"total_volume_24h"};
+my $total_market_cap = $global_data->{data}{quote}{$currency}{"total_market_cap"};
+my $total_volume_24h = $global_data->{data}{quote}{$currency}{"total_volume_24h"};
+
 
 %portfolio = map {
     $_ => {
         %{$portfolio{$_}},
-        market_data => from_json($ua->get(sprintf($url_ticker, $_, $currency))->decoded_content)->{"data"},
+        market_data => from_json($ua->get(sprintf($url_ticker, $_, $currency))->decoded_content)->{"data"}{$_},
+        #market_data => sprintf($url_ticker, $_, $currency),
     }
 } keys %portfolio;
 
@@ -113,13 +148,13 @@ my @portfolio_full = map {
         ticker       => $market_data->{symbol},
         qty          => $portfolio_data->{q},
         exchange     => $portfolio_data->{exchange},
-        price        => $market_data->{quotes}{$currency}{price},
-        value        => $market_data->{quotes}{$currency}{price} * $portfolio_data->{q},
-        market_share => $market_data->{quotes}{$currency}{market_cap}/$total_market_cap*100,
-        market_cap   => $market_data->{quotes}{$currency}{market_cap}/1000_000,
-        change_1h    => $market_data->{quotes}{$currency}{percent_change_1h},
-        change_24h   => $market_data->{quotes}{$currency}{percent_change_24h},
-        change_7d    => $market_data->{quotes}{$currency}{percent_change_7d},
+        price        => $market_data->{quote}{$currency}{price},
+        value        => $market_data->{quote}{$currency}{price} * $portfolio_data->{q},
+        market_share => $market_data->{quote}{$currency}{market_cap}/$total_market_cap*100,
+        market_cap   => $market_data->{quote}{$currency}{market_cap}/1000_000,
+        change_1h    => $market_data->{quote}{$currency}{percent_change_1h},
+        change_24h   => $market_data->{quote}{$currency}{percent_change_24h},
+        change_7d    => $market_data->{quote}{$currency}{percent_change_7d},
     };
 } keys %portfolio;
 
